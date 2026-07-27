@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "slug": "llm-unit-testing",
+  "step": "created",
+  "completed_specs": [],
+  "pending_specs": [
+    "structured-output-test",
+    "string-assertions-test",
+    "semantic-similarity-test",
+    "llm-judge-test",
+    "prompt-fixture-v3",
+    "promptfoo-config",
+    "deepeval-test",
+    "mocked-logic-test",
+    "ci-tiering-workflow"
+  ],
+  "created_at": "2026-07-27T11:14:32.724072+00:00",
+  "updated_at": "2026-07-27T11:14:32.724072+00:00"
+}
