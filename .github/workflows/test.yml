@@ -1,0 +1,128 @@
+name: prompt-tests
+
+# Three tiers, three costs.
+#
+#   Tier 1  every push          mocked and replayed tests, no credentials, seconds
+#   Tier 2  every pull request  a small live golden subset, real cost, bounded
+#   Tier 3  nightly schedule    the full eval suite, paid once a day
+#
+# Each tier maps to specific files, listed explicitly rather than hidden behind a
+# glob, so adding a slow test to the fast tier has to be a deliberate edit.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # 06:00 UTC daily.
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: prompt-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tier-1-mocked:
+    name: "Tier 1: mocked and replayed (every push)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install core dependencies
+        run: pip install -r requirements.txt
+
+      # No secrets are provided to this job at all, which is the point: if one of
+      # these tests ever needs a key, it does not belong in this tier.
+      - name: Run tier 1
+        run: |
+          pytest -m "not live" \
+            tests/test_prompt_logic_mocked.py \
+            tests/test_structured_output.py \
+            tests/test_string_assertions.py \
+            tests/test_semantic_similarity.py \
+            tests/test_llm_judge.py
+
+  tier-2-live-subset:
+    name: "Tier 2: live golden subset (pull requests)"
+    if: github.event_name == 'pull_request'
+    needs: tier-1-mocked
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install core and eval dependencies
+        run: pip install -r requirements.txt -r requirements-eval.txt
+
+      - name: DeepEval metrics on the golden cases
+        run: pytest -m live tests/test_deepeval_metrics.py
+
+      # A bounded slice of the Promptfoo matrix, so per-PR spend is predictable.
+      - name: Promptfoo, first two cases only
+        run: npx --yes promptfoo@latest eval --filter-first-n 2 --no-cache
+
+      - name: Upload Promptfoo results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-pr-subset
+          path: ~/.promptfoo/output
+          if-no-files-found: ignore
+
+  tier-3-full-eval:
+    name: "Tier 3: full eval suite (nightly)"
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: tier-1-mocked
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install core and eval dependencies
+        run: pip install -r requirements.txt -r requirements-eval.txt
+
+      - name: Every test, mocked and live
+        run: pytest tests/
+
+      - name: Promptfoo, full matrix
+        run: npx --yes promptfoo@latest eval --no-cache
+
+      - name: Upload Promptfoo results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-nightly
+          path: ~/.promptfoo/output
+          if-no-files-found: ignore

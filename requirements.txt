@@ -1,0 +1,6 @@
+# Core suite. Everything the every-commit tier needs, and nothing that talks to
+# a network. Install with: pip install -r requirements.txt
+pytest
+pydantic
+pyyaml
+numpy

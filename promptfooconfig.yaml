@@ -1,0 +1,147 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+#
+# Config-first prompt testing: prompts, cases, and graders declared as data.
+# Run it with:
+#
+#   npx promptfoo@latest eval          # full matrix
+#   npx promptfoo@latest eval --filter-first-n 2   # the pull-request subset
+#   npx promptfoo@latest view          # browse the result grid
+#
+# Needs OPENAI_API_KEY. The assertions below are Promptfoo built-ins, matching the
+# assertion types in tests/: is-json for the schema, contains and regex and
+# not-icontains for the string contract, similar for the semantic check, and
+# llm-rubric for the one property nothing cheaper expresses.
+
+description: summarize_ticket v3, matrix eval across providers and golden cases
+
+prompts:
+  - file://prompts/summarize_ticket/promptfoo_prompt.yaml
+
+providers:
+  - id: openai:chat:gpt-4o-mini
+    config:
+      temperature: 0
+      response_format:
+        type: json_object
+
+  # Uncomment to matrix the same cases across a second model. This is what
+  # Promptfoo is good at: the grid, not the individual assertion.
+  # - id: openai:chat:gpt-4o-2024-08-06
+  #   config:
+  #     temperature: 0
+  #     response_format:
+  #       type: json_object
+
+# Applied to every case below, so a shared contract is declared once.
+defaultTest:
+  assert:
+    - type: is-json
+      value:
+        type: object
+        required:
+          - account_id
+          - category
+          - urgency
+          - summary
+          - needs_human
+        properties:
+          account_id:
+            type: string
+            pattern: "^(ACCT-[0-9]{6}|unknown)$"
+          category:
+            type: string
+            enum: [billing, bug, how_to, other]
+          urgency:
+            type: integer
+            minimum: 1
+            maximum: 5
+          summary:
+            type: string
+            minLength: 10
+          needs_human:
+            type: boolean
+        additionalProperties: false
+
+    # The sign-off boilerplate the prompt forbids.
+    - type: not-icontains
+      value: Best regards
+    - type: not-icontains
+      value: Thanks for reaching out
+    - type: not-icontains
+      value: Let me know if there is anything else
+
+tests:
+  - description: billing duplicate charge, account id present in the body
+    vars:
+      ticket_id: T-1041
+      channel: email
+      ticket_body: |
+        Hi, I think something went wrong with my subscription payment this month.
+        My account is ACCT-482913. I see two charges of 49 dollars on the same day,
+        both from you, and I only have one subscription. Can you refund one of them?
+    assert:
+      - type: contains
+        value: ACCT-482913
+      - type: regex
+        value: "ACCT-[0-9]{6}"
+      - type: javascript
+        value: JSON.parse(output).category === 'billing'
+      - type: javascript
+        value: JSON.parse(output).needs_human === true
+      # Threshold calibrated the same way as tests/test_semantic_similarity.py:
+      # just below the worst known-good paraphrase, not at a round number.
+      - type: similar
+        value: >-
+          The customer was charged twice for the same monthly subscription on the same day
+          and is asking for one of the two duplicate charges to be refunded.
+        threshold: 0.72
+
+  - description: bug report, account id mid sentence
+    vars:
+      ticket_id: T-1103
+      channel: in_app
+      ticket_body: |
+        Every time I sign in on Chrome the page sends me back to the login screen
+        again. It just loops. Works fine in Safari. Account ACCT-771204 if that helps.
+        I cannot get to the invoices page at all right now.
+    assert:
+      - type: contains
+        value: ACCT-771204
+      - type: javascript
+        value: JSON.parse(output).category === 'bug'
+      - type: similar
+        value: >-
+          Signing in on Chrome sends the customer back to the login screen in a redirect
+          loop, which blocks the customer from reaching the invoices page, while Safari works.
+        threshold: 0.72
+
+  - description: how-to question with no account id, fallback applies
+    vars:
+      ticket_id: T-1188
+      channel: email
+      ticket_body: |
+        Where do I change the email address that receives the monthly invoice?
+        I looked in the profile settings and only found the login email.
+    assert:
+      - type: javascript
+        value: JSON.parse(output).account_id === 'unknown'
+      - type: javascript
+        value: JSON.parse(output).category === 'how_to'
+      # No invented identifier, which is the failure mode this case exists for.
+      - type: not-regex
+        value: "ACCT-[0-9]{6}"
+
+  - description: ambiguous one-line ticket, the case a judge earns its cost on
+    vars:
+      ticket_id: T-1201
+      channel: chat
+      ticket_body: |
+        it broke again
+    assert:
+      - type: javascript
+        value: "['bug', 'other'].includes(JSON.parse(output).category)"
+      - type: llm-rubric
+        value: >-
+          The summary states plainly that the ticket does not say what broke, and does
+          not invent a specific product area, error, or cause that the ticket never
+          mentioned. Pass or fail only.

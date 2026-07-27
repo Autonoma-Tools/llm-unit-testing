@@ -1,0 +1,10 @@
+# The live tiers only. Kept out of requirements.txt so the every-commit tier
+# installs in seconds and cannot accidentally acquire a model client.
+#
+#   pip install -r requirements.txt -r requirements-eval.txt
+#
+# Promptfoo is a Node tool and is not listed here. Run it with:
+#   npx promptfoo@latest eval
+-r requirements.txt
+deepeval
+openai

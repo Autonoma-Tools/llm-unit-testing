@@ -1,0 +1,151 @@
+# Versioned prompt fixture for the ticket summarizer.
+#
+# One file per prompt version. The tests load this file rather than importing a
+# string from application code, so a prompt edit shows up in a pull request as a
+# reviewable diff with a test result attached.
+#
+# Key contract (do not rename without updating the tests that read them):
+#   version, model, temperature   read by every test, asserted in CI
+#   system_prompt, user_template  rendered by summarizer/prompt_runtime.py
+#   golden_cases[].id             used to look up recorded responses in replay mode
+#   golden_cases[].variables      inputs interpolated into user_template
+#   golden_cases[].expected       deterministic field values (tests/test_structured_output.py)
+#   golden_cases[].must_contain           literal substrings (tests/test_string_assertions.py)
+#   golden_cases[].must_contain_patterns  regexes           (tests/test_string_assertions.py)
+#   golden_cases[].must_not_contain       forbidden strings (tests/test_string_assertions.py)
+#   golden_cases[].reference_summary      similarity target (tests/test_semantic_similarity.py)
+#   golden_cases[].accepted_summaries     calibration set   (tests/test_semantic_similarity.py)
+
+version: 3
+model: gpt-4o-mini
+temperature: 0
+max_input_tokens: 1200
+
+system_prompt: |
+  You are a support ticket summarizer for a subscription billing product.
+
+  Return a single JSON object and nothing else. No prose before or after it.
+
+  Required fields:
+    account_id    the account identifier exactly as it appears in the ticket, in the form ACCT-000000
+    category      one of: billing, bug, how_to, other
+    urgency       integer 1 to 5, where 5 means the customer is blocked from paying or using the product
+    summary       two sentences at most, describing what the customer wants, in plain language
+    needs_human   true when resolving the ticket requires an action only a human can take
+
+  Rules:
+    Never invent an account_id. If the ticket contains no identifier in the ACCT-000000 form, use the literal string "unknown".
+    Never add a greeting, a sign-off, or an offer to help further. The output is consumed by a pipeline, not read by a customer.
+    Never restate the ticket verbatim. Summarize it.
+
+user_template: |
+  Ticket ID: {ticket_id}
+  Channel: {channel}
+
+  Ticket body:
+  {ticket_body}
+
+golden_cases:
+  - id: billing_duplicate_charge
+    description: A clear billing complaint with an account id present in the body.
+    variables:
+      ticket_id: T-1041
+      channel: email
+      ticket_body: |
+        Hi, I think something went wrong with my subscription payment this month.
+        My account is ACCT-482913. I see two charges of 49 dollars on the same day,
+        both from you, and I only have one subscription. Can you refund one of them?
+    expected:
+      account_id: ACCT-482913
+      category: billing
+      needs_human: true
+    must_contain:
+      - ACCT-482913
+    must_contain_patterns:
+      - ACCT-\d{6}
+    must_not_contain:
+      - Best regards
+      - Thanks for reaching out
+      - Let me know if there is anything else
+    reference_summary: >-
+      The customer was charged twice for the same monthly subscription on the same day
+      and is asking for one of the two duplicate charges to be refunded.
+    accepted_summaries:
+      - >-
+        The customer sees two identical subscription charges on the same day and wants
+        one of the duplicate charges refunded.
+      - >-
+        A duplicate subscription charge was billed to the customer on the same day, and
+        the customer is requesting a refund for the second charge.
+      - >-
+        The customer reports being billed twice for one monthly subscription and asks
+        for a refund of the duplicate charge.
+
+  - id: bug_login_redirect_loop
+    description: A bug report where the account id appears mid sentence.
+    variables:
+      ticket_id: T-1103
+      channel: in_app
+      ticket_body: |
+        Every time I sign in on Chrome the page sends me back to the login screen
+        again. It just loops. Works fine in Safari. Account ACCT-771204 if that helps.
+        I cannot get to the invoices page at all right now.
+    expected:
+      account_id: ACCT-771204
+      category: bug
+      needs_human: true
+    must_contain:
+      - ACCT-771204
+    must_contain_patterns:
+      - ACCT-\d{6}
+    must_not_contain:
+      - Best regards
+      - Thanks for reaching out
+      - Let me know if there is anything else
+    reference_summary: >-
+      Signing in on Chrome sends the customer back to the login screen in a redirect
+      loop, which blocks the customer from reaching the invoices page, while Safari works.
+    accepted_summaries:
+      - >-
+        The customer is stuck in a login redirect loop on Chrome and cannot reach the
+        invoices page, though signing in on Safari works.
+      - >-
+        On Chrome the login page loops back to itself for this customer, blocking access
+        to the invoices page, while the same sign in works on Safari.
+      - >-
+        A redirect loop on the Chrome login screen prevents the customer from reaching
+        invoices, and Safari is unaffected.
+
+  - id: how_to_change_billing_email
+    description: A how-to question with no account id in the body, so the fallback applies.
+    variables:
+      ticket_id: T-1188
+      channel: email
+      ticket_body: |
+        Where do I change the email address that receives the monthly invoice?
+        I looked in the profile settings and only found the login email.
+    expected:
+      account_id: unknown
+      category: how_to
+      needs_human: false
+    must_contain:
+      - unknown
+    must_contain_patterns:
+      - "\"account_id\"\\s*:\\s*\"unknown\""
+    must_not_contain:
+      - Best regards
+      - Thanks for reaching out
+      - Let me know if there is anything else
+    reference_summary: >-
+      The customer wants to know where to change the email address that receives the
+      monthly invoice, having only found the login email in profile settings.
+    accepted_summaries:
+      - >-
+        The customer is asking where the invoice email address is changed, since profile
+        settings only exposed the login email.
+      - >-
+        The customer wants to change which email address receives the monthly invoice and
+        could not find that setting next to the login email.
+      - >-
+        Asking how to change the billing email that receives the monthly invoice, because
+        only the login email appears in profile settings.
