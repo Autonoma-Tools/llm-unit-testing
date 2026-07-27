@@ -68,3 +68,6 @@ promptfoo-errors.log
 .deepeval/
 .deepeval-cache.json
 .deepeval_telemetry.txt
+
+# ---- Bootstrap checkpoint ----
+.checkpoint
