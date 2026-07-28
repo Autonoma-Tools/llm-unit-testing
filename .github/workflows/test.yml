@@ -75,15 +75,38 @@ jobs:
       - name: Install core and eval dependencies
         run: pip install -r requirements.txt -r requirements-eval.txt
 
+      # The pytest side needs no gate of its own: every module in the live tiers
+      # carries `skipif(not os.getenv("OPENAI_API_KEY"))`, so it skips cleanly
+      # instead of erroring. Promptfoo has no such guard and exits 1 on a missing
+      # key, so it gets an explicit preflight below.
       - name: DeepEval metrics on the golden cases
         run: pytest -m live tests/test_deepeval_metrics.py
 
+      # This public reference repo has no API key configured, so the Promptfoo
+      # steps warn and skip rather than showing readers a permanently red badge.
+      #
+      # >>> IN YOUR OWN REPO, MAKE THIS A HARD FAILURE. <<<
+      # Replace the `have_key=false` line below with `exit 1`. A live tier that
+      # skips itself because a secret went missing is indistinguishable from a
+      # live tier that passed, and that is precisely the failure mode these
+      # tiers exist to catch.
+      - name: Check for the API key
+        id: preflight
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "::warning::OPENAI_API_KEY is not set, so the Promptfoo eval was skipped. Add it under Settings > Secrets and variables > Actions."
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # A bounded slice of the Promptfoo matrix, so per-PR spend is predictable.
       - name: Promptfoo, first two cases only
+        if: steps.preflight.outputs.have_key == 'true'
         run: npx --yes promptfoo@latest eval --filter-first-n 2 --no-cache
 
       - name: Upload Promptfoo results
-        if: always()
+        if: always() && steps.preflight.outputs.have_key == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: promptfoo-pr-subset
@@ -113,14 +136,29 @@ jobs:
       - name: Install core and eval dependencies
         run: pip install -r requirements.txt -r requirements-eval.txt
 
+      # Same as tier 2: the live pytest modules skip themselves when the key is
+      # absent, so this step stays green on its own.
       - name: Every test, mocked and live
         run: pytest tests/
 
+      # See the tier-2 note above. In your own repo this preflight should be
+      # `exit 1`, not a skip.
+      - name: Check for the API key
+        id: preflight
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "::warning::OPENAI_API_KEY is not set, so the nightly Promptfoo matrix was skipped. Add it under Settings > Secrets and variables > Actions."
+            echo "have_key=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "have_key=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Promptfoo, full matrix
+        if: steps.preflight.outputs.have_key == 'true'
         run: npx --yes promptfoo@latest eval --no-cache
 
       - name: Upload Promptfoo results
-        if: always()
+        if: always() && steps.preflight.outputs.have_key == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: promptfoo-nightly
